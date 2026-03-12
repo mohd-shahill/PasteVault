@@ -108,7 +108,7 @@ export default function HomePage() {
           <span className="footer-brand">🔐 PasteVault</span>
           <div className="footer-links">
             <a href="/about" className="footer-link">How it Works</a>
-            <a href="https://github.com" className="footer-link" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href="https://github.com/mohd-shahill/PasteVault" className="footer-link" target="_blank" rel="noopener noreferrer">GitHub</a>
           </div>
           <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
             Your data, your keys, always.
