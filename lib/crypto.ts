@@ -13,11 +13,11 @@ export async function generateKey(): Promise<CryptoKey> {
 
 export async function exportKey(key: CryptoKey): Promise<string> {
   const raw = await crypto.subtle.exportKey("raw", key);
-  return bufferToBase64(raw);
+  return await bufferToBase64UrlSafe(raw);
 }
 
 export async function importKey(keyBase64: string): Promise<CryptoKey> {
-  const raw = base64ToBuffer(keyBase64);
+  const raw = await base64ToBufferUrlSafe(keyBase64);
   return crypto.subtle.importKey(
     "raw",
     raw,
@@ -32,15 +32,19 @@ export async function encryptText(
   key: CryptoKey
 ): Promise<{ ciphertext: string; iv: string }> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(plaintext);
+  
+  // Compress plaintext (JSON with base64 image) to significantly reduce payload size
+  const stream = new Blob([plaintext]).stream().pipeThrough(new CompressionStream("deflate"));
+  const compressedBuffer = await new Response(stream).arrayBuffer();
+
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    encoded
+    compressedBuffer
   );
   return {
-    ciphertext: bufferToBase64(encrypted),
-    iv: bufferToBase64(iv),
+    ciphertext: await bufferToBase64(encrypted),
+    iv: await bufferToBase64(iv),
   };
 }
 
@@ -50,11 +54,14 @@ export async function decryptText(
   key: CryptoKey
 ): Promise<string> {
   const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToBuffer(iv) },
+    { name: "AES-GCM", iv: await base64ToBuffer(iv) },
     key,
-    base64ToBuffer(ciphertext)
+    await base64ToBuffer(ciphertext)
   );
-  return new TextDecoder().decode(decrypted);
+
+  // Decompress the decrypted buffer
+  const stream = new Blob([decrypted]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Response(stream).text();
 }
 
 // --- Optional: Password-based key derivation ---
@@ -62,7 +69,7 @@ export async function deriveKeyFromPassword(
   password: string,
   saltBase64: string
 ): Promise<CryptoKey> {
-  const salt = base64ToBuffer(saltBase64);
+  const salt = await base64ToBufferUrlSafe(saltBase64);
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),
@@ -84,27 +91,38 @@ export async function deriveKeyFromPassword(
   );
 }
 
-export function generateSalt(): string {
-  return bufferToBase64(crypto.getRandomValues(new Uint8Array(16)));
+export async function generateSalt(): Promise<string> {
+  return await bufferToBase64UrlSafe(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 // --- Utils ---
-function bufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
+export async function bufferToBase64(buffer: ArrayBuffer | Uint8Array): Promise<string> {
   const bytes = new Uint8Array(buffer);
+  const chunkSize = 32768; // 32KB chunks to avoid call stack overflow
   let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize) as any);
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  return btoa(binary);
 }
 
-function base64ToBuffer(base64: string): ArrayBuffer {
-  const padded = base64.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(padded);
-  const buffer = new ArrayBuffer(binary.length);
-  const view = new Uint8Array(buffer);
-  for (let i = 0; i < binary.length; i++) {
-    view[i] = binary.charCodeAt(i);
+export async function base64ToBuffer(base64: string): Promise<ArrayBuffer> {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
-  return buffer;
+  return bytes.buffer;
+}
+
+// For URL keys only
+export async function bufferToBase64UrlSafe(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  const b64 = await bufferToBase64(buffer);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+export async function base64ToBufferUrlSafe(base64: string): Promise<ArrayBuffer> {
+  const padded = base64.replace(/-/g, "+").replace(/_/g, "/");
+  return base64ToBuffer(padded);
 }

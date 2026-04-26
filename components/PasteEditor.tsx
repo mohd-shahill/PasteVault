@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Flame, Lock, Eye, ChevronDown, Shield } from "lucide-react";
+import { Flame, Lock, Eye, ChevronDown, Shield, Image as ImageIcon, X } from "lucide-react";
 import ShareModal from "./ShareModal";
 import {
   generateKey,
@@ -35,21 +35,45 @@ export default function PasteEditor() {
   const [passwordProtected, setPasswordProtected] = useState(false);
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("");
   const [error, setError] = useState("");
   const [shareUrl, setShareUrl] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [imageSize, setImageSize] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const charCount = content.length;
-  const isOverLimit = charCount > 450000;
+  // Track the actual raw size from the user's perspective
+  const rawTotalSize = content.length + imageSize;
+  const isOverLimit = rawTotalSize > 6 * 1024 * 1024; // 6MB raw limit
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 6 * 1024 * 1024) {
+      setError("Image too large (max 6MB limit).");
+      return;
+    }
+
+    setError(""); // Clear any previous error message
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setImageData(reader.result as string);
+      setImageSize(file.size);
+    };
+    reader.readAsDataURL(file);
+  };
+
 
   const handleCreate = async () => {
-    if (!content.trim()) {
-      setError("Please enter some content to encrypt.");
+    if (!content.trim() && !imageData) {
+      setError("Please enter some content or upload an image to encrypt.");
       return;
     }
     if (isOverLimit) {
-      setError("Content exceeds the 450KB limit.");
+      setError("Total content exceeds the limit.");
       return;
     }
     if (passwordProtected && password.length < 4) {
@@ -59,20 +83,28 @@ export default function PasteEditor() {
 
     setError("");
     setLoading(true);
+    setLoadingText("Encrypting locally...");
 
     try {
       let key;
       let salt: string | undefined;
 
       if (passwordProtected && password) {
-        salt = generateSalt();
+        salt = await generateSalt();
         key = await deriveKeyFromPassword(password, salt);
       } else {
         key = await generateKey();
       }
 
-      const { ciphertext, iv } = await encryptText(content, key);
+      const payloadObj = JSON.stringify({
+        text: content,
+        image: imageData
+      });
+
+      const { ciphertext, iv } = await encryptText(payloadObj, key);
       const exportedKey = await exportKey(key);
+
+      setLoadingText("Uploading to secure vault...");
 
       const res = await fetch("/api/paste", {
         method: "POST",
@@ -127,6 +159,8 @@ export default function PasteEditor() {
 
   const handleNewPaste = () => {
     setContent("");
+    setImageData(null);
+    setImageSize(0);
     setTitle("");
     setLanguage("plaintext");
     setExpiry(86400);
@@ -172,14 +206,58 @@ export default function PasteEditor() {
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
+            style={{
+              paddingBottom: imageData ? "20px" : "20px"
+            }}
           />
 
-          {/* Char count footer */}
-          <div className="editor-footer">
-            <span style={{ color: isOverLimit ? "var(--accent-red)" : "var(--text-muted)" }}>
-              {charCount.toLocaleString()} / 450,000 characters
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--accent-green)" }}>
+          {/* Image Preview */}
+          {imageData && (
+            <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "center" }}>
+              <div style={{ position: "relative", display: "inline-block" }}>
+                <img 
+                  src={imageData} 
+                  alt="Attachment" 
+                  style={{ maxHeight: "250px", maxWidth: "100%", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", display: "block", boxShadow: "0 8px 24px rgba(0,0,0,0.2)" }} 
+                />
+                <button 
+                  onClick={() => { setImageData(null); setImageSize(0); }}
+                  style={{
+                    position: "absolute",
+                    top: "10px",
+                    right: "10px",
+                    background: "rgba(0,0,0,0.65)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: "50%",
+                    color: "white",
+                    width: "26px",
+                    height: "26px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    backdropFilter: "blur(4px)"
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Footer controls */}
+          <div className="editor-footer" style={{ display: "flex", justifyContent: "space-between", padding: "12px 20px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.015)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+               <span style={{ color: isOverLimit ? "var(--accent-red)" : "var(--text-muted)", fontSize: "0.8rem" }}>
+                Size: {(rawTotalSize / 1024 / 1024).toFixed(2)} MB / 6.00 MB
+              </span>
+              
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: "0.8rem", color: "var(--accent-violet)" }}>
+                <ImageIcon size={14} /> Attach Image
+                <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} />
+              </label>
+            </div>
+            <span style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--accent-green)", fontSize: "0.8rem" }}>
               <Shield size={12} /> AES-256-GCM
             </span>
           </div>
@@ -298,13 +376,13 @@ export default function PasteEditor() {
             <button
               className="btn btn-primary"
               onClick={handleCreate}
-              disabled={loading || !content.trim() || isOverLimit}
+              disabled={loading || (!content.trim() && !imageData) || isOverLimit}
               id="create-paste-btn"
             >
               {loading ? (
                 <>
                   <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
-                  Encrypting...
+                  {loadingText}
                 </>
               ) : (
                 <>

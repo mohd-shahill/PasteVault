@@ -74,6 +74,7 @@ export default function ViewPastePage() {
   const [passwordError, setPasswordError] = useState("");
   const [copied, setCopied] = useState(false);
   const [highlightedHtml, setHighlightedHtml] = useState("");
+  const [decryptedImage, setDecryptedImage] = useState<string | null>(null);
 
   // Fetch paste on load
   useEffect(() => {
@@ -127,14 +128,32 @@ export default function ViewPastePage() {
     }
   };
 
+  const handleDecryptedText = async (rawDecrypted: string, language: string) => {
+    let textContent = rawDecrypted;
+    let imageContent = null;
+    
+    try {
+      const parsed = JSON.parse(rawDecrypted);
+      if (parsed.text !== undefined || parsed.image !== undefined) {
+        textContent = parsed.text || "";
+        imageContent = parsed.image || null;
+      }
+    } catch {
+      // Not JSON, treat as raw text
+    }
+
+    setDecryptedContent(textContent);
+    setDecryptedImage(imageContent);
+    await applyHighlighting(textContent, language);
+    setState("success");
+  };
+
   const decryptAndShow = async (data: PasteData, keyBase64: string) => {
     setState("decrypting");
     try {
       const key = await importKey(keyBase64);
       const plaintext = await decryptText(data.ciphertext, data.iv, key);
-      setDecryptedContent(plaintext);
-      await applyHighlighting(plaintext, data.language);
-      setState("success");
+      await handleDecryptedText(plaintext, data.language);
     } catch {
       setErrorMessage("Decryption failed. The link may be corrupted or tampered with.");
       setState("error");
@@ -148,9 +167,7 @@ export default function ViewPastePage() {
     try {
       const key = await deriveKeyFromPassword(password, pasteData.salt!);
       const plaintext = await decryptText(pasteData.ciphertext, pasteData.iv, key);
-      setDecryptedContent(plaintext);
-      await applyHighlighting(plaintext, pasteData.language);
-      setState("success");
+      await handleDecryptedText(plaintext, pasteData.language);
     } catch {
       setPasswordError("Wrong password or corrupted data. Please try again.");
       setState("password-required");
@@ -183,14 +200,25 @@ export default function ViewPastePage() {
   };
 
   const handleDownload = () => {
-    const ext = pasteData?.language === "plaintext" ? "txt" : pasteData?.language || "txt";
-    const blob = new Blob([decryptedContent], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${pasteData?.title || "paste"}.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (decryptedContent && decryptedContent.trim() !== "") {
+      const ext = pasteData?.language === "plaintext" ? "txt" : pasteData?.language || "txt";
+      const blob = new Blob([decryptedContent], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${pasteData?.title || "paste"}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    if (decryptedImage) {
+      const a = document.createElement("a");
+      a.href = decryptedImage;
+      const mimeMatch = decryptedImage.match(/data:image\/([a-zA-Z0-9]+);/);
+      const imgExt = mimeMatch ? mimeMatch[1] : "png";
+      a.download = `${pasteData?.title || "paste"}_image.${imgExt}`;
+      a.click();
+    }
   };
 
   // ─── States ───
@@ -427,6 +455,17 @@ export default function ViewPastePage() {
                 )}
               </div>
             </div>
+
+            {/* Attached Image */}
+            {decryptedImage && (
+              <div className="encrypted-image-container" style={{ marginTop: 24, textAlign: 'center' }}>
+                <img 
+                  src={decryptedImage} 
+                  alt="Decrypted secure content" 
+                  style={{ maxWidth: '100%', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
+                />
+              </div>
+            )}
 
             {/* Encryption proof */}
             <div style={{
